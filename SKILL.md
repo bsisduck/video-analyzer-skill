@@ -1,6 +1,6 @@
 ---
 name: analyzing-video
-description: Analyzes video files by extracting frames, detecting scene changes, and optionally transcribing audio. Produces structured markdown analysis with timeline, visual descriptions, and key moments. Use when the user provides a video file (.mp4, .mov, .avi, .mkv, .webm) and wants analysis, asks to "analyze a video", "describe this video", "video timeline", "what happens in this video", or mentions video content understanding. Supports visual-only mode ("skip audio", "visual only") and user-provided transcripts.
+description: Analyzes video files by extracting frames, detecting scene changes, and optionally transcribing audio. Produces structured markdown analysis with timeline, visual descriptions, and key moments. Use when the user provides a video file (.mp4, .mov, .avi, .mkv, .webm) and wants analysis, asks to "analyze a video", "describe this video", "video timeline", "what happens in this video", or mentions video content understanding. Supports custom frame rates ("at 5fps", "1 frame every 3 seconds"), time ranges ("from 0:10 to 0:30", "first 15 seconds"), visual-only mode ("skip audio"), and user-provided transcripts.
 argument-hint: [video-path]
 allowed-tools: Bash, Read, Agent
 ---
@@ -33,6 +33,32 @@ brew install ffmpeg && pip install openai-whisper
 | **auto** | Default | Run Whisper |
 | **user-provided** | User supplies transcript file/text | Use provided transcript |
 | **skip** | "visual only", "skip audio", "no transcription" | No audio processing |
+
+## Customization
+
+Detect these overrides from the user's request:
+
+| Override | User Says | Effect |
+|----------|-----------|--------|
+| **Custom FPS** | "at 5fps", "3 frames per second", "1 frame every 2 seconds" | Override tier-based fps rate |
+| **Time range** | "from 0:10 to 0:30", "first 15 seconds", "last minute" | Analyze only the specified segment |
+| **Both** | "analyze 0:10-0:30 at 5fps" | Custom fps on a segment |
+
+Convert user phrasing to script parameters:
+- "5fps" / "5 frames per second" → fps_override=`5`
+- "1 frame every 3 seconds" → fps_override=`0.333`
+- "1 frame every 10 seconds" → fps_override=`0.1`
+- "from 0:10 to 0:30" → start_time=`10` end_time=`30`
+- "first 15 seconds" → start_time=`0` end_time=`15`
+- "last 30 seconds" → calculate: start_time=`duration-30`
+
+Pass overrides to scripts:
+```bash
+bash ${CLAUDE_SKILL_DIR}/scripts/video-info.sh "<video_path>" [fps_override] [start_time] [end_time]
+bash ${CLAUDE_SKILL_DIR}/scripts/extract-frames.sh "<video_path>" "<work_dir>/frames" <fps> <max> <stream> <grid> [start_time] [end_time]
+```
+
+When custom fps is set, tier becomes `custom` and the 200-frame safety cap applies.
 
 ## Workflow
 

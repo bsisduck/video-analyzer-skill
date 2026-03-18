@@ -6,7 +6,10 @@
 
 set -euo pipefail
 
-INPUT="${1:?Usage: video-info.sh <input_video>}"
+INPUT="${1:?Usage: video-info.sh <input_video> [fps_override] [start_time] [end_time]}"
+FPS_OVERRIDE="${2:-}"      # e.g., "5" for 5fps, "0.2" for 1/5sec
+START_TIME="${3:-}"        # e.g., "00:00:10" or "10"
+END_TIME="${4:-}"          # e.g., "00:00:30" or "30"
 
 if [[ ! -f "$INPUT" ]]; then
     echo "ERROR: File not found: $INPUT" >&2
@@ -80,18 +83,34 @@ DURATION=$(echo "$PROBE" | python3 -c "import sys,json; d=json.load(sys.stdin); 
 DURATION_INT=$(echo "$DURATION" | cut -d. -f1)
 FILESIZE=$(echo "$PROBE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['format'].get('size','0'))" 2>/dev/null || echo "0")
 
-# Determine analysis tier
-if [[ "$DURATION_INT" -le 60 ]]; then
+# Calculate effective duration (respecting time range)
+EFFECTIVE_DURATION="$DURATION"
+if [[ -n "$START_TIME" && -n "$END_TIME" ]]; then
+    # Convert HH:MM:SS or seconds to seconds
+    start_sec=$(echo "$START_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
+    end_sec=$(echo "$END_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
+    EFFECTIVE_DURATION=$(echo "$end_sec - $start_sec" | bc -l 2>/dev/null)
+elif [[ -n "$START_TIME" ]]; then
+    start_sec=$(echo "$START_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
+    EFFECTIVE_DURATION=$(echo "$DURATION - $start_sec" | bc -l 2>/dev/null)
+elif [[ -n "$END_TIME" ]]; then
+    end_sec=$(echo "$END_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
+    EFFECTIVE_DURATION="$end_sec"
+fi
+EFFECTIVE_INT=$(echo "$EFFECTIVE_DURATION" | cut -d. -f1)
+
+# Determine analysis tier (based on effective duration)
+if [[ "$EFFECTIVE_INT" -le 60 ]]; then
     TIER="short"
     FPS_RATE="2"
     WHISPER_MODEL="medium"
     DESCRIPTION="Under 1min: 2 frames/sec, detailed visual+audio analysis"
-elif [[ "$DURATION_INT" -le 180 ]]; then
+elif [[ "$EFFECTIVE_INT" -le 180 ]]; then
     TIER="medium"
     FPS_RATE="1"
     WHISPER_MODEL="medium"
     DESCRIPTION="1-3min: 1 frame/sec, detailed analysis with transcription"
-elif [[ "$DURATION_INT" -le 600 ]]; then
+elif [[ "$EFFECTIVE_INT" -le 600 ]]; then
     TIER="long"
     FPS_RATE="0.1"
     WHISPER_MODEL="base"
@@ -103,12 +122,23 @@ else
     DESCRIPTION="10min+: 1 frame/20sec (capped), transcription-focused"
 fi
 
-# Calculate expected frames
-EXPECTED_FRAMES=$(echo "$DURATION * $FPS_RATE" | bc -l 2>/dev/null | cut -d. -f1)
+# Apply fps override if provided
+CUSTOM_FPS="false"
+if [[ -n "$FPS_OVERRIDE" ]]; then
+    FPS_RATE="$FPS_OVERRIDE"
+    CUSTOM_FPS="true"
+    TIER="custom"
+    DESCRIPTION="Custom: ${FPS_RATE} frames/sec (user override)"
+fi
 
-# Cap extended tier at ~60 frames
+# Calculate expected frames
+EXPECTED_FRAMES=$(echo "$EFFECTIVE_DURATION * $FPS_RATE" | bc -l 2>/dev/null | cut -d. -f1)
+
+# Cap at 200 frames to avoid excessive extraction
 MAX_FRAMES=0
-if [[ "$TIER" == "extended" && "$EXPECTED_FRAMES" -gt 60 ]]; then
+if [[ "$EXPECTED_FRAMES" -gt 200 ]]; then
+    MAX_FRAMES=200
+elif [[ "$TIER" == "extended" && "$CUSTOM_FPS" == "false" && "$EXPECTED_FRAMES" -gt 60 ]]; then
     MAX_FRAMES=60
 fi
 
@@ -136,6 +166,9 @@ cat <<EOF
   "path": "$INPUT",
   "duration_seconds": $DURATION,
   "duration_formatted": "$FORMATTED",
+  "effective_duration": $EFFECTIVE_DURATION,
+  "start_time": "${START_TIME:-0}",
+  "end_time": "${END_TIME:-$FORMATTED}",
   "filesize_bytes": $FILESIZE,
   "width": $WIDTH,
   "height": $HEIGHT,
@@ -146,6 +179,7 @@ cat <<EOF
   "video_stream_index": $VIDEO_STREAM_INDEX,
   "tier": "$TIER",
   "tier_description": "$DESCRIPTION",
+  "custom_fps": $CUSTOM_FPS,
   "fps_rate": $FPS_RATE,
   "expected_frames": ${EXPECTED_FRAMES:-0},
   "max_frames": $MAX_FRAMES,

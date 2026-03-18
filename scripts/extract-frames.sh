@@ -8,12 +8,14 @@
 
 set -euo pipefail
 
-INPUT="${1:?Usage: extract-frames.sh <input_video> <output_dir> <fps_rate> [max_frames] [stream_index] [grid_layout]}"
+INPUT="${1:?Usage: extract-frames.sh <input_video> <output_dir> <fps_rate> [max_frames] [stream_index] [grid_layout] [start_time] [end_time]}"
 OUTPUT_DIR="${2:?Specify output directory}"
 FPS="${3:?Specify fps rate (e.g., 2, 1, 0.1, 0.05)}"
 MAX_FRAMES="${4:-0}"  # 0 = unlimited
 STREAM_INDEX="${5:-auto}"  # auto = detect correct stream
 GRID_LAYOUT="${6:-4x4}"  # tile layout for grids
+START_TIME="${7:-}"  # e.g., "00:00:10" or "10" (seconds)
+END_TIME="${8:-}"    # e.g., "00:00:30" or "30" (seconds)
 
 # Validate input
 if [[ ! -f "$INPUT" ]]; then
@@ -49,6 +51,15 @@ fi
 # Build the -map argument to select the correct video stream
 MAP_ARG="-map 0:${STREAM_INDEX}"
 
+# Build time range arguments
+TIME_ARGS=""
+if [[ -n "$START_TIME" ]]; then
+    TIME_ARGS="-ss $START_TIME"
+fi
+if [[ -n "$END_TIME" ]]; then
+    TIME_ARGS="$TIME_ARGS -to $END_TIME"
+fi
+
 # Get video info from the correct stream
 DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null)
 RESOLUTION=$(ffprobe -v error -select_streams v:${STREAM_INDEX} -show_entries stream=width,height -of csv=p=0 "$INPUT" 2>/dev/null || echo "unknown")
@@ -76,9 +87,10 @@ if [[ "$MAX_FRAMES" -gt 0 ]]; then
 fi
 
 # Extract individual frames as JPG
-# Note: $MAP_ARG and $FRAME_LIMIT intentionally unquoted for word splitting
+# Note: $MAP_ARG, $TIME_ARGS, $FRAME_LIMIT intentionally unquoted for word splitting
 ffmpeg -i "$INPUT" \
     $MAP_ARG \
+    $TIME_ARGS \
     -vf "$FILTER" \
     -q:v 2 \
     $FRAME_LIMIT \
@@ -97,9 +109,10 @@ echo "=== Creating Montage Grids ==="
 GRID_CELL_WIDTH=640
 MONTAGE_FILTER="fps=${FPS},scale='min(${GRID_CELL_WIDTH},iw)':-2,drawtext=text='%{pts\\:hms}':x=5:y=5:fontsize=16:fontcolor=white:borderw=1:bordercolor=black,tile=${GRID_LAYOUT}"
 
-# Note: $MAP_ARG intentionally unquoted for word splitting
+# Note: $MAP_ARG, $TIME_ARGS intentionally unquoted for word splitting
 ffmpeg -i "$INPUT" \
     $MAP_ARG \
+    $TIME_ARGS \
     -vf "$MONTAGE_FILTER" \
     -q:v 2 \
     "${OUTPUT_DIR}/grid_%03d.jpg" \
@@ -112,8 +125,10 @@ echo "Created: $GRIDS montage grids (${GRID_LAYOUT})"
 echo ""
 echo "=== Scene Change Detection ==="
 SCENE_FILE="${OUTPUT_DIR}/scene_changes.txt"
+# Note: $MAP_ARG, $TIME_ARGS intentionally unquoted for word splitting
 ffmpeg -i "$INPUT" \
     $MAP_ARG \
+    $TIME_ARGS \
     -vf "select='gt(scene,0.3)',showinfo" \
     -f null - 2>&1 | grep 'pts_time' | sed 's/.*pts_time:\([0-9.]*\).*/\1/' | grep '^[0-9]' > "$SCENE_FILE" || true
 
