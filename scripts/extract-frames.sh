@@ -8,8 +8,7 @@
 
 set -euo pipefail
 
-# Add ffmpeg path for Windows compatibility (put ffmpeg binaries in ~/bin/)
-export PATH="$HOME/bin:$PATH"
+[[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]] && export PATH="$HOME/bin:$PATH"
 
 INPUT="${1:?Usage: extract-frames.sh <input_video> <output_dir> <fps_rate> [max_frames] [stream_index] [grid_layout] [start_time] [end_time]}"
 OUTPUT_DIR="${2:?Specify output directory}"
@@ -66,8 +65,7 @@ fi
 # Get video info from the correct stream
 DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null)
 RESOLUTION=$(ffprobe -v error -select_streams v:${STREAM_INDEX} -show_entries stream=width,height -of csv=p=0 "$INPUT" 2>/dev/null || echo "unknown")
-# Use python3 instead of bc for Windows compatibility
-TOTAL_FRAMES=$(python3 -c "print(int($DURATION * $FPS))" 2>/dev/null)
+TOTAL_FRAMES=$(python3 -c "print(int(float('$DURATION') * float('$FPS')))" 2>/dev/null)
 
 echo "=== Video Frame Extraction ==="
 echo "Input: $INPUT"
