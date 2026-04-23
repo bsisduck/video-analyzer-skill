@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# Add ffmpeg path for Windows compatibility (put ffmpeg binaries in ~/bin/)
+export PATH="$HOME/bin:$PATH"
+
 INPUT="${1:?Usage: extract-audio.sh <input_video> <output_dir> [whisper_model]}"
 OUTPUT_DIR="${2:?Specify output directory}"
 MODEL="${3:-base}"  # tiny|base|small|medium|large

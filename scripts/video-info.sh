@@ -6,6 +6,9 @@
 
 set -euo pipefail
 
+# Add ffmpeg path for Windows compatibility (put ffmpeg binaries in ~/bin/)
+export PATH="$HOME/bin:$PATH"
+
 INPUT="${1:?Usage: video-info.sh <input_video> [fps_override] [start_time] [end_time]}"
 FPS_OVERRIDE="${2:-}"      # e.g., "5" for 5fps, "0.2" for 1/5sec
 START_TIME="${3:-}"        # e.g., "00:00:10" or "10"
@@ -89,10 +92,11 @@ if [[ -n "$START_TIME" && -n "$END_TIME" ]]; then
     # Convert HH:MM:SS or seconds to seconds
     start_sec=$(echo "$START_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
     end_sec=$(echo "$END_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
-    EFFECTIVE_DURATION=$(echo "$end_sec - $start_sec" | bc -l 2>/dev/null)
+    # Use python3 instead of bc for Windows compatibility
+    EFFECTIVE_DURATION=$(python3 -c "print($end_sec - $start_sec)" 2>/dev/null)
 elif [[ -n "$START_TIME" ]]; then
     start_sec=$(echo "$START_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
-    EFFECTIVE_DURATION=$(echo "$DURATION - $start_sec" | bc -l 2>/dev/null)
+    EFFECTIVE_DURATION=$(python3 -c "print($DURATION - $start_sec)" 2>/dev/null)
 elif [[ -n "$END_TIME" ]]; then
     end_sec=$(echo "$END_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
     EFFECTIVE_DURATION="$end_sec"
@@ -131,8 +135,8 @@ if [[ -n "$FPS_OVERRIDE" ]]; then
     DESCRIPTION="Custom: ${FPS_RATE} frames/sec (user override)"
 fi
 
-# Calculate expected frames
-EXPECTED_FRAMES=$(echo "$EFFECTIVE_DURATION * $FPS_RATE" | bc -l 2>/dev/null | cut -d. -f1)
+# Calculate expected frames (use python3 instead of bc for Windows compatibility)
+EXPECTED_FRAMES=$(python3 -c "print(int($EFFECTIVE_DURATION * $FPS_RATE))" 2>/dev/null)
 
 # Cap at 200 frames to avoid excessive extraction
 MAX_FRAMES=0
