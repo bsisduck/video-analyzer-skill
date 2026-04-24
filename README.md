@@ -4,6 +4,8 @@ A video analysis skill for [Claude Code](https://claude.ai/claude-code) that ext
 
 Follows the [Agent Skills](https://agentskills.io) open standard.
 
+[Try it online](https://socialistic.ai/video-analyzer-skill-321552?utm_source=github_readme&utm_campaign=koc_skill_creator&utm_content=hyperlink)
+
 ## Features
 
 - **Automatic tier selection** — adapts frame rate based on video duration
