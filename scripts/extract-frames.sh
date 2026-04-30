@@ -5,11 +5,11 @@
 # fps_rate examples: 2 (2/sec), 1 (1/sec), 0.1 (1/10sec), 0.05 (1/20sec)
 # stream_index: video stream index (default: auto-detect, skipping thumbnails)
 # grid_layout: tile layout for montage grids (default: 4x4)
-
+ 
 set -euo pipefail
-
+ 
 [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]] && export PATH="$HOME/bin:$PATH"
-
+ 
 INPUT="${1:?Usage: extract-frames.sh <input_video> <output_dir> <fps_rate> [max_frames] [stream_index] [grid_layout] [start_time] [end_time]}"
 OUTPUT_DIR="${2:?Specify output directory}"
 FPS="${3:?Specify fps rate (e.g., 2, 1, 0.1, 0.05)}"
@@ -18,16 +18,54 @@ STREAM_INDEX="${5:-auto}"  # auto = detect correct stream
 GRID_LAYOUT="${6:-4x4}"  # tile layout for grids
 START_TIME="${7:-}"  # e.g., "00:00:10" or "10" (seconds)
 END_TIME="${8:-}"    # e.g., "00:00:30" or "30" (seconds)
-
+ 
+is_number() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+ 
+is_time_value() {
+    [[ "$1" =~ ^([0-9]+(:[0-9]{1,2}(:[0-9]{1,2})?)?)$ ]]
+}
+ 
 # Validate input
 if [[ ! -f "$INPUT" ]]; then
     echo "ERROR: File not found: $INPUT" >&2
     exit 1
 fi
-
+ 
+if ! is_number "$FPS"; then
+    echo "ERROR: Invalid fps rate: $FPS" >&2
+    exit 1
+fi
+ 
+if ! [[ "$MAX_FRAMES" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: max_frames must be a non-negative integer: $MAX_FRAMES" >&2
+    exit 1
+fi
+ 
+if [[ "$STREAM_INDEX" != "auto" ]] && ! [[ "$STREAM_INDEX" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: stream_index must be 'auto' or a non-negative integer: $STREAM_INDEX" >&2
+    exit 1
+fi
+ 
+if ! [[ "$GRID_LAYOUT" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]]; then
+    echo "ERROR: grid_layout must match NxM (e.g., 4x4): $GRID_LAYOUT" >&2
+    exit 1
+fi
+ 
+if [[ -n "$START_TIME" ]] && ! is_time_value "$START_TIME"; then
+    echo "ERROR: Invalid start_time format: $START_TIME" >&2
+    exit 1
+fi
+ 
+if [[ -n "$END_TIME" ]] && ! is_time_value "$END_TIME"; then
+    echo "ERROR: Invalid end_time format: $END_TIME" >&2
+    exit 1
+fi
+ 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
-
+ 
 # Auto-detect video stream if not specified
 if [[ "$STREAM_INDEX" == "auto" ]]; then
     STREAM_INDEX=$(ffprobe -v error -show_streams -of json "$INPUT" 2>/dev/null | python3 -c "
@@ -49,24 +87,22 @@ else:
             break
 " 2>/dev/null || echo "0")
 fi
-
+ 
 # Build the -map argument to select the correct video stream
-MAP_ARG="-map 0:${STREAM_INDEX}"
-
-# Build time range arguments
-TIME_ARGS=""
+MAP_ARGS=("-map" "0:${STREAM_INDEX}")
+TIME_ARGS=()
 if [[ -n "$START_TIME" ]]; then
-    TIME_ARGS="-ss $START_TIME"
+    TIME_ARGS+=("-ss" "$START_TIME")
 fi
 if [[ -n "$END_TIME" ]]; then
-    TIME_ARGS="$TIME_ARGS -to $END_TIME"
+    TIME_ARGS+=("-to" "$END_TIME")
 fi
-
+ 
 # Get video info from the correct stream
 DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$INPUT" 2>/dev/null)
 RESOLUTION=$(ffprobe -v error -select_streams v:${STREAM_INDEX} -show_entries stream=width,height -of csv=p=0 "$INPUT" 2>/dev/null || echo "unknown")
 TOTAL_FRAMES=$(python3 -c "print(int(float('$DURATION') * float('$FPS')))" 2>/dev/null)
-
+ 
 echo "=== Video Frame Extraction ==="
 echo "Input: $INPUT"
 echo "Duration: ${DURATION}s"
@@ -77,66 +113,63 @@ echo "Grid layout: $GRID_LAYOUT"
 echo "Estimated frames: $TOTAL_FRAMES"
 echo "Output: $OUTPUT_DIR"
 echo ""
-
+ 
 # Build FFmpeg filter - resize to max 1280px wide, burn timestamp
 FILTER="fps=${FPS},scale='min(1280,iw)':-2,drawtext=text='%{pts\\:hms}':x=10:y=10:fontsize=28:fontcolor=white:borderw=2:bordercolor=black"
-
+ 
 # Add frame limit if specified
-FRAME_LIMIT=""
+FRAME_LIMIT_ARGS=()
 if [[ "$MAX_FRAMES" -gt 0 ]]; then
-    FRAME_LIMIT="-frames:v $MAX_FRAMES"
+    FRAME_LIMIT_ARGS=("-frames:v" "$MAX_FRAMES")
     echo "Frame limit: $MAX_FRAMES"
 fi
-
+ 
 # Extract individual frames as JPG
-# Note: $MAP_ARG, $TIME_ARGS, $FRAME_LIMIT intentionally unquoted for word splitting
 ffmpeg -i "$INPUT" \
-    $MAP_ARG \
-    $TIME_ARGS \
+    "${MAP_ARGS[@]}" \
+    "${TIME_ARGS[@]}" \
     -vf "$FILTER" \
     -q:v 2 \
-    $FRAME_LIMIT \
+    "${FRAME_LIMIT_ARGS[@]}" \
     "${OUTPUT_DIR}/frame_%05d.jpg" \
     -y -loglevel warning 2>&1
-
+ 
 EXTRACTED=$(ls "${OUTPUT_DIR}"/frame_*.jpg 2>/dev/null | wc -l | tr -d ' ')
 echo "Extracted: $EXTRACTED frames"
-
+ 
 # Generate montage grids
 echo ""
 echo "=== Creating Montage Grids ==="
-
+ 
 # Determine grid cell size based on orientation
 # Parse grid layout to determine if portrait-optimized
 GRID_CELL_WIDTH=640
 MONTAGE_FILTER="fps=${FPS},scale='min(${GRID_CELL_WIDTH},iw)':-2,drawtext=text='%{pts\\:hms}':x=5:y=5:fontsize=16:fontcolor=white:borderw=1:bordercolor=black,tile=${GRID_LAYOUT}"
-
-# Note: $MAP_ARG, $TIME_ARGS intentionally unquoted for word splitting
+ 
 ffmpeg -i "$INPUT" \
-    $MAP_ARG \
-    $TIME_ARGS \
+    "${MAP_ARGS[@]}" \
+    "${TIME_ARGS[@]}" \
     -vf "$MONTAGE_FILTER" \
     -q:v 2 \
     "${OUTPUT_DIR}/grid_%03d.jpg" \
     -y -loglevel warning 2>&1
-
+ 
 GRIDS=$(ls "${OUTPUT_DIR}"/grid_*.jpg 2>/dev/null | wc -l | tr -d ' ')
 echo "Created: $GRIDS montage grids (${GRID_LAYOUT})"
-
+ 
 # Detect scene changes (key moments)
 echo ""
 echo "=== Scene Change Detection ==="
 SCENE_FILE="${OUTPUT_DIR}/scene_changes.txt"
-# Note: $MAP_ARG, $TIME_ARGS intentionally unquoted for word splitting
 ffmpeg -i "$INPUT" \
-    $MAP_ARG \
-    $TIME_ARGS \
+    "${MAP_ARGS[@]}" \
+    "${TIME_ARGS[@]}" \
     -vf "select='gt(scene,0.3)',showinfo" \
     -f null - 2>&1 | grep 'pts_time' | sed 's/.*pts_time:\([0-9.]*\).*/\1/' | grep '^[0-9]' > "$SCENE_FILE" || true
-
+ 
 SCENE_COUNT=$(wc -l < "$SCENE_FILE" | tr -d ' ')
 echo "Detected: $SCENE_COUNT scene changes"
-
+ 
 # Extract key frames at scene changes (high-res individual frames for detailed analysis)
 # Cap at 20 key frames to avoid excessive extraction
 if [[ "$SCENE_COUNT" -gt 0 ]]; then
@@ -149,7 +182,7 @@ if [[ "$SCENE_COUNT" -gt 0 ]]; then
         TS_SAFE=$(echo "$TIMESTAMP" | tr '.' '_')
         OUTFILE="${OUTPUT_DIR}/key_frames/scene_$(printf '%02d' $KEY_IDX)_${TS_SAFE}s.jpg"
         ffmpeg -i "$INPUT" \
-            $MAP_ARG \
+            "${MAP_ARGS[@]}" \
             -ss "$TIMESTAMP" \
             -frames:v 1 \
             -vf "scale='min(1280,iw)':-2,drawtext=text='${TIMESTAMP}s':x=10:y=10:fontsize=32:fontcolor=white:borderw=2:bordercolor=black" \
@@ -161,7 +194,7 @@ if [[ "$SCENE_COUNT" -gt 0 ]]; then
     KEY_EXTRACTED=$(ls "${OUTPUT_DIR}"/key_frames/scene_*.jpg 2>/dev/null | wc -l | tr -d ' ')
     echo "Extracted: $KEY_EXTRACTED key frames at scene changes"
 fi
-
+ 
 # Write metadata file
 cat > "${OUTPUT_DIR}/metadata.json" <<METAEOF
 {

@@ -3,24 +3,47 @@
 # Usage: video-info.sh <input_video>
 # Outputs JSON with duration, resolution, codec, fps, audio info
 # Auto-detects the correct video stream (skips attached_pic/thumbnails)
-
+ 
 set -euo pipefail
-
+ 
 [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]] && export PATH="$HOME/bin:$PATH"
-
+ 
 INPUT="${1:?Usage: video-info.sh <input_video> [fps_override] [start_time] [end_time]}"
 FPS_OVERRIDE="${2:-}"      # e.g., "5" for 5fps, "0.2" for 1/5sec
 START_TIME="${3:-}"        # e.g., "00:00:10" or "10"
 END_TIME="${4:-}"          # e.g., "00:00:30" or "30"
-
+ 
+is_number() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+ 
+is_time_value() {
+    [[ "$1" =~ ^([0-9]+(:[0-9]{1,2}(:[0-9]{1,2})?)?)$ ]]
+}
+ 
 if [[ ! -f "$INPUT" ]]; then
     echo "ERROR: File not found: $INPUT" >&2
     exit 1
 fi
-
+ 
+if [[ -n "$FPS_OVERRIDE" ]] && ! is_number "$FPS_OVERRIDE"; then
+    echo "ERROR: fps_override must be numeric: $FPS_OVERRIDE" >&2
+    exit 1
+fi
+ 
+if [[ -n "$START_TIME" ]] && ! is_time_value "$START_TIME"; then
+    echo "ERROR: Invalid start_time format: $START_TIME" >&2
+    exit 1
+fi
+ 
+if [[ -n "$END_TIME" ]] && ! is_time_value "$END_TIME"; then
+    echo "ERROR: Invalid end_time format: $END_TIME" >&2
+    exit 1
+fi
+ 
 # Get full probe data
 PROBE=$(ffprobe -v error -show_format -show_streams -of json "$INPUT" 2>/dev/null)
-
+ 
 # Auto-detect the correct video stream index (skip attached_pic/thumbnail streams)
 # attached_pic streams have disposition.attached_pic=1 and are typically MJPEG
 VIDEO_STREAM_INDEX=$(echo "$PROBE" | python3 -c "
