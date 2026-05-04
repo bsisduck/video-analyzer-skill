@@ -13,8 +13,65 @@ FPS_OVERRIDE="${2:-}"      # e.g., "5" for 5fps, "0.2" for 1/5sec
 START_TIME="${3:-}"        # e.g., "00:00:10" or "10"
 END_TIME="${4:-}"          # e.g., "00:00:30" or "30"
 
+MAX_FPS=120
+MAX_CUSTOM_FRAMES=1000
+
+is_positive_number() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+    awk -v n="$1" 'BEGIN { exit !(n > 0) }'
+}
+
+number_lte() {
+    awk -v n="$1" -v max="$2" 'BEGIN { exit !(n <= max) }'
+}
+
+is_time_value() {
+    [[ "$1" =~ ^[0-9]+$ || "$1" =~ ^[0-9]+:[0-5]?[0-9]$ || "$1" =~ ^[0-9]+:[0-5]?[0-9]:[0-5]?[0-9]$ ]]
+}
+
+time_to_seconds() {
+    local value="$1"
+    local first second third
+    IFS=: read -r first second third <<< "$value"
+
+    if [[ -z "${second:-}" ]]; then
+        echo "$((10#$first))"
+    elif [[ -z "${third:-}" ]]; then
+        echo "$((10#$first * 60 + 10#$second))"
+    else
+        echo "$((10#$first * 3600 + 10#$second * 60 + 10#$third))"
+    fi
+}
+
 if [[ ! -f "$INPUT" ]]; then
     echo "ERROR: File not found: $INPUT" >&2
+    exit 1
+fi
+
+if [[ -n "$FPS_OVERRIDE" ]] && { ! is_positive_number "$FPS_OVERRIDE" || ! number_lte "$FPS_OVERRIDE" "$MAX_FPS"; }; then
+    echo "ERROR: fps_override must be > 0 and <= ${MAX_FPS}: $FPS_OVERRIDE" >&2
+    exit 1
+fi
+
+if [[ -n "$START_TIME" ]] && ! is_time_value "$START_TIME"; then
+    echo "ERROR: Invalid start_time format: $START_TIME" >&2
+    exit 1
+fi
+
+if [[ -n "$END_TIME" ]] && ! is_time_value "$END_TIME"; then
+    echo "ERROR: Invalid end_time format: $END_TIME" >&2
+    exit 1
+fi
+START_SECONDS=0
+if [[ -n "$START_TIME" ]]; then
+    START_SECONDS=$(time_to_seconds "$START_TIME")
+fi
+END_SECONDS=""
+if [[ -n "$END_TIME" ]]; then
+    END_SECONDS=$(time_to_seconds "$END_TIME")
+fi
+if [[ -n "$END_SECONDS" && "$END_SECONDS" -le "$START_SECONDS" ]]; then
+    echo "ERROR: end_time must be greater than start_time" >&2
     exit 1
 fi
 
@@ -87,19 +144,16 @@ FILESIZE=$(echo "$PROBE" | python3 -c "import sys,json; d=json.load(sys.stdin); 
 
 # Calculate effective duration (respecting time range)
 EFFECTIVE_DURATION="$DURATION"
-if [[ -n "$START_TIME" && -n "$END_TIME" ]]; then
-    # Convert HH:MM:SS or seconds to seconds
-    start_sec=$(echo "$START_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
-    end_sec=$(echo "$END_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
-    EFFECTIVE_DURATION=$(python3 -c "print(float('$end_sec') - float('$start_sec'))" 2>/dev/null)
+if [[ -n "$END_SECONDS" ]]; then
+    EFFECTIVE_DURATION=$((END_SECONDS - START_SECONDS))
 elif [[ -n "$START_TIME" ]]; then
-    start_sec=$(echo "$START_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
-    EFFECTIVE_DURATION=$(python3 -c "print(float('$DURATION') - float('$start_sec'))" 2>/dev/null)
-elif [[ -n "$END_TIME" ]]; then
-    end_sec=$(echo "$END_TIME" | awk -F: '{if(NF==3) print $1*3600+$2*60+$3; else if(NF==2) print $1*60+$2; else print $1}')
-    EFFECTIVE_DURATION="$end_sec"
+    EFFECTIVE_DURATION=$(awk -v duration="$DURATION" -v start="$START_SECONDS" 'BEGIN { printf "%.6f\n", duration - start }')
 fi
-EFFECTIVE_INT=$(echo "$EFFECTIVE_DURATION" | cut -d. -f1)
+if ! awk -v duration="$EFFECTIVE_DURATION" 'BEGIN { exit !(duration > 0) }'; then
+    echo "ERROR: effective duration must be greater than zero" >&2
+    exit 1
+fi
+EFFECTIVE_INT=$(awk -v duration="$EFFECTIVE_DURATION" 'BEGIN { print int(duration) }')
 
 # Determine analysis tier (based on effective duration)
 if [[ "$EFFECTIVE_INT" -le 60 ]]; then
@@ -135,9 +189,11 @@ fi
 
 EXPECTED_FRAMES=$(python3 -c "print(int(float('$EFFECTIVE_DURATION') * float('$FPS_RATE')))" 2>/dev/null)
 
-# Cap at 200 frames to avoid excessive extraction
+# Cap expected frames to avoid excessive extraction
 MAX_FRAMES=0
-if [[ "$EXPECTED_FRAMES" -gt 200 ]]; then
+if [[ "$CUSTOM_FPS" == "true" && "$EXPECTED_FRAMES" -gt "$MAX_CUSTOM_FRAMES" ]]; then
+    MAX_FRAMES="$MAX_CUSTOM_FRAMES"
+elif [[ "$CUSTOM_FPS" == "false" && "$EXPECTED_FRAMES" -gt 200 ]]; then
     MAX_FRAMES=200
 elif [[ "$TIER" == "extended" && "$CUSTOM_FPS" == "false" && "$EXPECTED_FRAMES" -gt 60 ]]; then
     MAX_FRAMES=60

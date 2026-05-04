@@ -58,7 +58,7 @@ bash ${CLAUDE_SKILL_DIR}/scripts/video-info.sh "<video_path>" [fps_override] [st
 bash ${CLAUDE_SKILL_DIR}/scripts/extract-frames.sh "<video_path>" "<work_dir>/frames" <fps> <max> <stream> <grid> [start_time] [end_time]
 ```
 
-When custom fps is set, tier becomes `custom` and the 200-frame safety cap applies.
+When custom fps is set, tier becomes `custom` and the 1000-frame safety cap applies.
 
 ## Workflow
 
