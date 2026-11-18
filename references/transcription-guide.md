@@ -2,40 +2,38 @@
 
 Only non-obvious details. Claude knows how to use Whisper.
 
-## Model Selection
+## Order of Preference
 
-Use Whisper CLI (`openai-whisper` package). Default tool — don't offer alternatives unless Whisper fails.
+1. **Existing subtitles** — embedded text streams (`extract-subtitles.sh`) or a sidecar `.srt`/`.vtt` next to the video. Instant, and usually more accurate than re-transcribing.
+2. **mlx-whisper** — Apple Silicon only. Runs `whisper-large-v3-turbo` on the GPU.
+3. **openai-whisper** — any platform.
 
-| Model | Speed | WER | When to Use |
-|-------|-------|-----|-------------|
-| base | ~7x | ~5.8% | Long/extended videos (speed priority) |
-| medium | ~2x | ~3.5% | Short/medium videos (quality priority) |
-| large-v3-turbo | ~6x | ~2.9% | Best tradeoff if available (newer whisper versions) |
+`extract-audio.sh` picks between 2 and 3 itself (`WHISPER_BACKEND=auto`): mlx-whisper when `mlx_whisper` is on PATH on Apple Silicon, otherwise the `whisper` CLI, otherwise it skips transcription and says so.
+
+## Backends
+
+| Backend | Install | Model used | Notes |
+|---------|---------|------------|-------|
+| `mlx` | `uv tool install mlx-whisper` | `mlx-community/whisper-large-v3-turbo` (override with `WHISPER_MLX_MODEL`) | The `whisper_model` argument is ignored. With `WHISPER_BACKEND=mlx` and no install, the script falls back to `uvx --from mlx-whisper`, which downloads the package on first use |
+| `openai` | `pip install -U openai-whisper` | The `whisper_model` argument | `base` for long videos (speed), `medium` for short ones (accuracy), `turbo` if the release supports it |
+| `none` | — | — | Audio, silence and volume only |
+
+The first run of any model downloads it (tiny ~75 MB, large-v3-turbo ~1.6 GB).
 
 ## Gotchas
 
-- Whisper requires Python 3.10-3.12 (not 3.13+). If the system Python is too new, Whisper may be installed under an older Python (check `which whisper`).
-- Audio must be 16kHz mono WAV for best results: `ffmpeg -i input.mp4 -vn -acodec pcm_s16le -ar 16000 -ac 1 audio.wav`
-- `--output_format all` generates txt, json, srt, vtt, tsv simultaneously.
-- JSON output has `segments[].start` and `segments[].end` in seconds (float), not milliseconds.
-- `--verbose False` suppresses per-segment stdout output that can be very long.
-- If Whisper is not installed, skip transcription and proceed with visual-only analysis.
-
-## Parse Transcription JSON
-
-```bash
-# Get segments with timestamps
-python3 -c "
-import json
-d = json.load(open('audio.json'))
-for s in d['segments']:
-    print(f'[{s[\"start\"]:.1f}s - {s[\"end\"]:.1f}s] {s[\"text\"].strip()}')
-"
-```
+- Use `transcript.txt`. Its timestamps are absolute video time. Whisper's own `audio.json`/`audio.srt`/`audio.vtt` start at 0 from the beginning of the extracted range (`time_offset_seconds` in `audio_metadata.json`).
+- `silence.txt` is also relative to `time_offset_seconds`.
+- openai-whisper needs Python 3.10-3.12 (not 3.13+). If the system Python is too new, Whisper may live under an older one (check `which whisper`).
+- openai-whisper releases before 2023 have no `--output_format` and no JSON output. The script detects this and builds `transcript.txt` from the `.srt` instead, but the language is then reported as `unknown`. Upgrade when you can.
+- A stale openai-whisper can also crash outright against newer dependencies. The script then exits with code `3` and sets `transcription_error` in `audio_metadata.json`; the WAV, silence and volume files are still valid.
+- Auto-detection picks the wrong language on short or music-heavy clips. Set `WHISPER_LANGUAGE` (e.g. `pl`) when the language is known.
+- Whisper invents text over silence and music ("Thank you for watching"). Cross-check suspicious lines against `silence.txt`.
+- Image-based subtitle formats (DVD, Blu-ray PGS) cannot be extracted as text; `video-info.sh` leaves them out of `subtitle_streams`.
 
 ## Troubleshooting
 
-- **Out of memory**: Use `base` model
-- **Bad accuracy**: Set `--language` explicitly, or try `medium`/`large`
-- **No audio detected**: Check `has_audio` from video-info.sh before running
-- **Wrong language**: `--language en` (or appropriate code)
+- **Exit code 3**: read `transcription_error`, fix or switch backend (`WHISPER_BACKEND=mlx` or `openai`), or continue visual-only
+- **Out of memory**: use `base` (openai) or `WHISPER_MLX_MODEL=mlx-community/whisper-base-mlx`
+- **Bad accuracy**: set `WHISPER_LANGUAGE`, or use `medium`/`turbo`
+- **No audio detected**: `has_audio` is false in `video-info.sh`; `extract-audio.sh` exits 0 with `has_audio: false`

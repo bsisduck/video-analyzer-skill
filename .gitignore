@@ -12,5 +12,7 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Test output
-*.analysis.md
+# Generated analyses and Python caches
+*_analysis.md
+__pycache__/
+*.pyc
